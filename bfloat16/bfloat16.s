@@ -1179,8 +1179,10 @@ bf16_sqrt_search_square_while:
     add  t0, t4, t5
     srli t0, t0, 1
     
+    j    bf16_sqrt_pow_init
+
+bf16_sqrt_search_square_pow:
     # sq = (mid * mid) / 128
-    mul  t1, t0, t0
     srli t1, t1, 7
     
     # if (sq <= m)
@@ -1189,6 +1191,45 @@ bf16_sqrt_search_square_while:
     # else
     
     j    bf16_sqrt_search_square_while_midMinus1 
+
+bf16_sqrt_pow_init:
+    # set sq = 0 , s5 = t0 , s4 = t0
+    add  s4, t0, x0
+    add  s5, t0, x0
+    add  t1, x0, x0
+
+    j    bf16_sqrt_pow_forLoop
+        
+bf16_sqrt_pow_forLoop: 
+    # if s5 == 0, return bf16_sqrt_search_square_pow
+    beq  s5, x0, bf16_sqrt_search_square_pow
+ 
+    andi s0, s5, 1
+    # if (s0&1  ==  0), j bf16_sqrt_pow_lsbZero
+    beq  s0, x0, bf16_sqrt_pow_lsbZero
+
+    j    bf16_sqrt_pow_lsbOne
+
+bf16_sqrt_pow_lsbOne:
+    # sq = sq + s4
+    add  t1, t1, s4
+    
+    # s4 <<= 1
+    slli s4, s4, 1
+
+    # s5 >>= 1
+    srli s5, s5, 1
+
+    j    bf16_sqrt_pow_forLoop
+
+bf16_sqrt_pow_lsbZero:
+    # s4 <<= 1
+    slli s4, s4, 1
+
+    # s5 >>= 1
+    srli s5, s5, 1
+
+    j    bf16_sqrt_pow_forLoop
 
 bf16_sqrt_search_square_while_midPlus1:
     # result = mid;
