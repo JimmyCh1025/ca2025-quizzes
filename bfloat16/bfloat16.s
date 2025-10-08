@@ -1,3 +1,11 @@
+#=======================================================================================
+# File : bfloat16.s 
+# Author : Jimmy Chen
+# Date : 2025-10-08
+# Brief : Implementation of bfloat16 arithmetic operations (add, sub, mul, div, sqrt)
+#          including conversion between float and bfloat16, with IEEE 754 support.
+#=======================================================================================
+
 .data
 
 # define
@@ -8,14 +16,955 @@
 .equ BF16_EXP_BIAS, 127
 .equ BF16_NAN, 0x7FC0
 .equ BF16_ZERO, 0x0000
-    
+
+# input data
+
+input_a:
+    .half 0x0000, 0x8000, 0x3f80, 0x4000, 0x4040, 0xbf80, 0x7f80, 0xff80, 0x7fc1, 0x4110, 0xc080, 0x0001, 0x0a4b, 0x40a0, 0x7f00
+
+input_b:
+    .half 0x0000, 0x0000, 0x4000, 0x3f80, 0x4000, 0x3f80, 0x3f80, 0x7f80, 0x3f80, 0x0000, 0x0000, 0x0001, 0x0a4b, 0x0000, 0x7f00
+
+input_float:
+    .word 0x3F800000, 0x3FC00000, 0x3F81AE14, 0x00000000, 0x80000000, 0x477FE000, 0x7F800000, 0xFF800000, 0x7FC00000, 0x00000001, 0xC0200000, 0x40490FDB, 0xC2F6E979, 0x3EAAAAAB, 0x2F06C6D6
+
+# ans 
+isNanAns:
+    .half 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+
+isInfAns:
+    .half 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+
+isZeroAns:
+    .half 0x0001, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+
+f32tob16Ans:
+    .half 0x3f80, 0x3fc0, 0x3f82, 0x0000, 0x8000, 0x4780, 0x7f80, 0xff80, 0x7fc0, 0x0000, 0xc020, 0x4049, 0xc2f7, 0x3eab, 0x2f07
+
+
+b16tof32Ans:
+    .word 0x00000000, 0x80000000, 0x3f800000, 0x40000000, 0x40400000, 0xbf800000, 0x7f800000, 0xff800000, 0x7fc10000, 0x41100000, 0xc0800000, 0x00010000, 0x0a4b0000, 0x40a00000, 0x7f000000
+
+addAns:
+    .half 0x0000, 0x0000, 0x4040, 0x4040, 0x40a0, 0x0000, 0x7f80, 0x7fc0, 0x7fc1, 0x4110, 0xc080, 0x0002, 0x0acb, 0x40a0, 0x7f80
+
+subAns:
+    .half 0x8000, 0x8000, 0xbf80, 0x3f80, 0x3f80, 0xc000, 0x7f80, 0xff80, 0x7fc1, 0x4110, 0xc080, 0x0000, 0x0000, 0x40a0, 0x0000
+
+mulAns:
+    .half 0x0000, 0x8000, 0x4000, 0x4000, 0x40c0, 0xbf80, 0x7f80, 0xff80, 0x7fc1, 0x0000, 0x8000, 0x0000, 0x0000, 0x0000, 0x7f80
+
+divAns:
+    .half 0x7fc0, 0x7fc0, 0x3f00, 0x4000, 0x3fc0, 0xbf80, 0x7f80, 0x7fc0, 0x7fc1, 0x7f80, 0xff80, 0x3f80, 0x3f80, 0x7f80, 0x3f80
+ 
+sqrtAns:
+    .half 0x0000, 0x0000, 0x3f80, 0x3fb5, 0x3fdd, 0x7fc0, 0x7f80, 0x7fc0, 0x7fc1, 0x4040, 0x7fc0, 0x0000, 0x24e4, 0x400f, 0x5f35
+
 # string
+msg_test_nan:
+    .string "======Test NAN======\n"
+
+msg_test_inf:
+    .string "======Test INF======\n"
+
+msg_test_zero:
+    .string "======Test ZERO======\n"
+
+msg_test_f32tob16:
+    .string "======Test F32ToB16======\n"
+    
+msg_test_b16tof32:
+    .string "======Test B16ToF32======\n"
+    
+msg_test_add:
+    .string "======Test ADD======\n"
+    
+msg_test_sub:
+    .string "======Test SUB======\n"
+    
+msg_test_mul:
+    .string "======Test MUL======\n"
+    
+msg_test_div:
+    .string "======Test DIV======\n"
+    
+msg_test_sqrt:
+    .string "======Test SQRT======\n"
+
+
+pass_str:
+    .string " => Pass\n"
+
+fail_str:
+    .string " => Fail\n"
+
+output_str:
+    .string "Output = "
+
+
+answer_str:
+    .string ",Answer = "
+
 
 .text
-.global bf16_isnan
+.global main
 
+# =======================================================
+# Function : main()
+# Parameter : none
+# Variable : i = s0, boundary = 15 
+# Description : execute all function and print the result
+# Return : 0 (exit program)
+# =======================================================
 main:
+    #  i = 0, boundary = 15
+    add  s0, x0, x0  
 
+    j    main_for 
+
+main_for:
+    addi t0, x0, 15
+    
+    # if i >= 15, return exit
+    bge  s0, t0, main_exit
+    j    main_for_run_nan
+
+#======================nan=====================
+main_for_run_nan:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i] to bf16_nan()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    # call bf16_isnan
+    jal  ra, bf16_isnan
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_nan
+
+
+main_for_printf_nan:
+    
+    # print test nan
+    la   a0, msg_test_nan
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, isNanAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_nan_pass
+
+    j    main_for_nan_fail
+
+main_for_nan_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+    
+    j    main_for_run_inf
+
+
+main_for_nan_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_inf
+
+#======================inf=====================
+main_for_run_inf:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i] to bf16_inf()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    # call bf16_isinf
+    jal  ra, bf16_isinf
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_inf
+
+main_for_printf_inf:
+    # print test inf
+    la   a0, msg_test_inf
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, isInfAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_inf_pass
+
+    j    main_for_inf_fail
+
+main_for_inf_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_zero
+
+main_for_inf_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_zero
+
+#======================zero=====================
+main_for_run_zero:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i] to bf16_iszero()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    # call bf16_iszero
+    jal  ra, bf16_iszero
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_zero
+
+main_for_printf_zero:
+    # print test zero
+    la   a0, msg_test_zero
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, isZeroAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_zero_pass
+
+    j    main_for_zero_fail
+
+main_for_zero_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_f32tob16
+
+main_for_zero_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_f32tob16
+
+
+#======================f32tob16=====================
+main_for_run_f32tob16:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load test_float[i] to f32_to_bf16()
+    slli t0, s0, 2
+    la   t1, input_float
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    # call f32_to_bf16
+    jal  ra, f32_to_bf16
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_f32tob16
+
+main_for_printf_f32tob16:
+    # print test f32tob16
+    la   a0, msg_test_f32tob16
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, f32tob16Ans
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_f32tob16_pass
+
+    j    main_for_f32tob16_fail
+
+main_for_f32tob16_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_b16tof32
+
+main_for_f32tob16_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_b16tof32
+
+#======================b16tof32=====================
+main_for_run_b16tof32:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i] to bf16_to_f32()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    # call bf16_to_f32
+    jal  ra, bf16_to_f32
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_b16tof32
+
+main_for_printf_b16tof32:
+    # print test b16tof32
+    la   a0, msg_test_b16tof32
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    add  a0, s3, x0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, b16tof32Ans
+    slli t0, s0, 2
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    ecall  
+
+    beq  t5, t6, main_for_b16tof32_pass
+
+    j    main_for_b16tof32_fail
+
+
+main_for_b16tof32_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_add
+
+main_for_b16tof32_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_add
+
+#======================add=====================
+main_for_run_add:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i], b[i] to bf16_add()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    la   t2, input_b
+    add  t2, t2, t0
+    lw   a1, 0(t2)
+
+    # call bf16_add
+    jal  ra, bf16_add
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_add
+
+main_for_printf_add:
+    # print test add
+    la   a0, msg_test_add
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, addAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_add_pass
+
+    j    main_for_add_fail
+
+main_for_add_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_sub
+
+main_for_add_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_sub
+
+#======================sub=====================
+main_for_run_sub:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i], b[i] to bf16_sub()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    la   t2, input_b
+    add  t2, t2, t0
+    lw   a1, 0(t2)
+
+    # call bf16_sub
+    jal  ra, bf16_sub
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_sub
+
+main_for_printf_sub:
+    # print test sub
+    la   a0, msg_test_sub
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, subAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_sub_pass
+
+    j    main_for_sub_fail
+
+main_for_sub_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_mul
+
+main_for_sub_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_mul
+
+#======================mul=====================
+main_for_run_mul:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i], b[i] to bf16_mul()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    la   t2, input_b
+    add  t2, t2, t0
+    lw   a1, 0(t2)
+
+    # call bf16_mul
+    jal  ra, bf16_mul
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_mul
+
+main_for_printf_mul:
+    # print test mul
+    la   a0, msg_test_mul
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, mulAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_mul_pass
+
+    j    main_for_mul_fail
+
+main_for_mul_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_div
+
+main_for_mul_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_div
+
+
+#======================div=====================
+main_for_run_div:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i], b[i] to bf16_div()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    la   t2, input_b
+    add  t2, t2, t0
+    lw   a1, 0(t2)
+
+    # call bf16_div
+    jal  ra, bf16_div
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_div
+
+main_for_printf_div:
+    # print test div
+    la   a0, msg_test_div
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, divAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_div_pass
+
+    j    main_for_div_fail
+
+main_for_div_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_sqrt
+
+main_for_div_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    j    main_for_run_sqrt
+
+#======================sqrt=====================
+main_for_run_sqrt:
+    addi sp, sp, -8
+    sw   ra, 4(sp)
+    sw   s0, 0(sp)
+
+    # load a[i] to bf16_sqrt()
+    slli t0, s0, 1
+    la   t1, input_a
+    add  t1, t1, t0
+    lw   a0, 0(t1)
+
+    # call bf16_sqrt
+    jal  ra, bf16_sqrt
+
+    # value of return stores in s3 
+    add  s3, a0, x0
+
+    lw   s0, 0(sp)
+    lw   ra, 4(sp)
+    addi sp, sp, 8
+
+    j    main_for_printf_sqrt
+
+main_for_printf_sqrt:
+    # print test sqrt
+    la   a0, msg_test_sqrt
+    li   a7, 4
+    ecall
+
+    # print output string
+    la   a0, output_str
+    ecall
+
+    # print output value
+    li   t0, 0xFFFF
+    and  a0, s3, t0
+    li   a7, 34
+    # for compare
+    add  t5, a0, x0
+    ecall  
+
+    # print answer string
+    la   a0, answer_str
+    li   a7, 4
+    ecall
+
+    # print ans value
+    la   s3, sqrtAns
+    slli t0, s0, 1
+    add  t0, s3, t0
+    lw   a0, 0(t0) 
+    li   a7, 34
+    # for compare
+    add  t6, a0, x0
+    li   t4, 0xffff
+    and  a0, t6, t4
+    and  t6, t6, t4
+    ecall  
+
+    beq  t5, t6, main_for_sqrt_pass
+
+    j    main_for_sqrt_fail
+
+main_for_sqrt_pass:
+    # print pass
+    la   a0, pass_str
+    li   a7, 4
+    ecall
+
+    # ++i
+    addi s0, s0, 1
+
+    j    main_for
+
+main_for_sqrt_fail:
+    # print fail
+    la   a0, fail_str
+    li   a7, 4
+    ecall
+
+    # ++i
+    addi s0, s0, 1
+
+    j    main_for
+
+#======================main exit=====================
+main_exit:
+    li   a7, 10
+    ecall
+    
+# =======================================================
+# Function : bf16_isnan()
+# Parameter : bf16_t a
+# Variable : 
+# Description : Returns true if a is NaN; otherwise, returns false 
+# Return : 1(true) or 0(false)
+# =======================================================
 # test ok
 bf16_isnan:
     # t1 = (a.bits & BF16_EXP_MASK)
@@ -39,6 +988,13 @@ bf16_isnan_ret0:
     add  a0, x0, x0
     jalr x0, ra, 0
 
+# =======================================================
+# Function : bf16_isinf()
+# Parameter : bf16_t a
+# Variable : 
+# Description : Returns true if the input is +Infinity or -Infinity.
+# Return : 1(true) or 0(false)
+# =======================================================
 # test ok
 bf16_isinf:
     # t1 = (a.bits & BF16_EXP_MASK)
@@ -62,7 +1018,13 @@ bf16_isinf_ret0:
     add  a0, x0, x0
     jalr x0, ra, 0
 
-
+# =======================================================
+# Function : bf16_iszero()
+# Parameter : bf16_t a
+# Variable : 
+# Description : Returns true if the input is positive or negative zero.
+# Return : 1(true) or 0(false)
+# =======================================================
 # test ok
 bf16_iszero:
     # t1 = (a.bits & 0x7FFF)
@@ -80,7 +1042,13 @@ bf16_iszero_ret0:
     jalr x0, ra, 0
 
 
-
+# =======================================================
+# Function : f32_to_bf16()
+# Parameter : float val
+# Variable : 
+# Description : Convert a 32-bit float to 16-bit bfloat16 by keeping the upper 16 bits.
+# Return : bf16_t value(a0)
+# =======================================================
 # test ok
 f32_to_bf16:
     # u32 t0 = f32bits
@@ -117,7 +1085,14 @@ f32_to_bf16_ret_exp_not_allOne:
     and  a0, a0, t1
     jalr x0, ra, 0
     
-    
+
+# =======================================================
+# Function : bf16_to_f32()
+# Parameter : bf16_t a
+# Variable : 
+# Description : Converts a bfloat16 value to 32-bit float by zero-extending the lower bits.
+# Return : float value(a0)
+# =======================================================
 # test ok
 bf16_to_f32:
     # u32 f32bits = ((u32) val.bits) << 16;
@@ -129,7 +1104,13 @@ bf16_to_f32:
     # return result
     jalr x0, ra, 0
 
-
+# =======================================================
+# Function : bf16_add()
+# Parameter : bf16_t a, bf16_t b
+# Variable : 
+# Description : Performs bfloat16 addition with proper handling of special cases (NaN, Inf, zero).
+# Return : b16_t value(a0)
+# =======================================================
 # test ok
 bf16_add:
     addi sp, sp, -24
@@ -433,7 +1414,13 @@ bf16_add_ret:
     addi sp, sp, 24
     jalr x0, ra, 0
 
-
+# =======================================================
+# Function : bf16_sub()
+# Parameter : bf16_t a, bf16_t b
+# Variable : 
+# Description : Performs bfloat16 subtraction by flipping the sign of the second operand and adding.
+# Return : b16_t value(a0)
+# =======================================================
 # test ok
 bf16_sub:
     addi sp, sp, -4
@@ -450,7 +1437,13 @@ bf16_sub:
     addi sp, sp, 4
     jalr x0, ra, 0
 
-
+# =======================================================
+# Function : bf16_mul()
+# Parameter : bf16_t a, bf16_t b
+# Variable : 
+# Description : Performs bfloat16 multiplication with normalization and special case handling.
+# Return : b16_t value(a0)
+# =======================================================
 # test ok
 bf16_mul:
     addi sp, sp, -24
@@ -788,7 +1781,13 @@ bf16_mul_ret:
     addi sp, sp, 24
     jalr x0, ra, 0
 
-
+# =======================================================
+# Function : bf16_div()
+# Parameter : bf16_t a, bf16_t b
+# Variable : 
+# Description : Performs bfloat16 division using bit-level integer division and handles edge cases.
+# Return : b16_t value(a0)
+# =======================================================
 # test ok
 bf16_div:
     addi sp, sp, -24
@@ -1084,7 +2083,13 @@ bf16_div_return:
     addi sp, sp, 24
     jalr x0, ra, 0
 
-
+# =======================================================
+# Function : bf16_sqrt()
+# Parameter : bf16_t a
+# Variable : 
+# Description : Computes the square root of a bfloat16 number using bitwise operations and binary search.
+# Return : b16_t value(a0)
+# =======================================================
 # test ok
 bf16_sqrt:
     addi sp, sp, -12
@@ -1347,4 +2352,3 @@ bf16_sqrt_return:
     lw   s3, 8(sp)
     addi sp, sp, 12
     jalr x0, ra, 0    
-

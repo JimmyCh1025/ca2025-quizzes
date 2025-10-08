@@ -1,4 +1,13 @@
+#=======================================================================================
+# File : uf8.s 
+# Author : Jimmy Chen
+# Date : 2025-10-08
+# Brief: Implements encoding and decoding for the custom 8-bit UF8 format.
+#=======================================================================================
+
 .data
+
+# string
 all_tests_passed_str:
     .string "All tests passed.\n"
 
@@ -20,6 +29,13 @@ endline_str:
 .text
 .global main
 
+# =======================================================
+# Function : main()
+# Parameter : none
+# Variable : 
+# Description : execute test function and print pass if test return true.
+# Return : 0 (exit program)
+# =======================================================
 main:
 
     jal  ra, test               # call test 
@@ -41,7 +57,13 @@ main_return1:
     addi a0, a0, 1
     ecall
     
-   
+# =======================================================
+# Function : test()
+# Parameter : none
+# Variable : 
+# Description : Performs round-trip tests on UF8 encoding and decoding to ensure correctness.
+# Return : 1(true) or 0(false)
+# =======================================================  
 test:
     addi sp, sp, -16         
     sw ra, 12(sp)
@@ -162,7 +184,13 @@ test_done:
     addi sp, sp, 16
     jalr x0, x1, 0
     
-
+# =======================================================
+# Function : uf8_decode()
+# Parameter : uf8 fl
+# Variable : 
+# Description : Decodes an 8-bit UF8 value into a 32-bit unsigned integer.
+# Return : uint32_t uf8_decode value
+# =======================================================
 uf8_decode:
     # u32 mantissa = fl & 0x0F
     andi t0, a0, 0x0F
@@ -183,7 +211,14 @@ uf8_decode:
     sll  a0, t0, t1
     add  a0, a0, t4
     jalr x0, x1, 0
-    
+
+# =======================================================
+# Function : uf8_encode()
+# Parameter : uint32_t value
+# Variable : 
+# Description : Encodes a 32-bit unsigned integer into an 8-bit UF8 representation.
+# Return : uf8 endcode value
+# =======================================================
 uf8_encode:
     li   t0, 16
     blt  a0, t0, uf8_encode_return_val
@@ -297,7 +332,13 @@ uf8_encode_return_val:
     
 
 
-
+# =======================================================
+# Function : clz()
+# Parameter : uint32_t x
+# Variable : 
+# Description : Counts the number of leading zeros in a 32-bit unsigned integer.
+# Return : unsigned val
+# =======================================================
 clz:
     li   t0, 32 # t0 = n
     li   t1, 16 # t1 = c

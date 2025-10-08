@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -31,10 +32,9 @@ static inline bool bf16_iszero(bf16_t a)
     return !(a.bits & 0x7FFF);
 }
 
-static inline bf16_t f32_to_bf16(float val)
+static inline bf16_t f32_to_bf16(uint32_t val)
 {
-    uint32_t f32bits;
-    memcpy(&f32bits, &val, sizeof(float));
+    uint32_t f32bits = val;
     if (((f32bits >> 23) & 0xFF) == 0xFF)
         return (bf16_t) {.bits = (f32bits >> 16) & 0xFFFF};
     f32bits += ((f32bits >> 16) & 1) + 0x7FFF;
@@ -274,10 +274,8 @@ static inline bf16_t bf16_div(bf16_t a, bf16_t b)
         return (bf16_t) {.bits = (result_sign << 15) | 0x7F80};
     if (result_exp <= 0)
         return (bf16_t) {.bits = result_sign << 15};
-    return (bf16_t) {
-        .bits = (result_sign << 15) | ((result_exp & 0xFF) << 7) |
-                (quotient & 0x7F),
-    };
+    return (bf16_t) {.bits = (result_sign << 15) | ((result_exp & 0xFF) << 7) |
+                             (quotient & 0x7F)};
 }
 
 static inline bf16_t bf16_sqrt(bf16_t a)
@@ -371,234 +369,256 @@ static inline bf16_t bf16_sqrt(bf16_t a)
     return (bf16_t) {.bits = ((new_exp & 0xFF) << 7) | new_mant};
 }
 
-static inline bool bf16_eq(bf16_t a, bf16_t b)
+int main()
 {
-    if (bf16_isnan(a) || bf16_isnan(b))
-        return false;
-    if (bf16_iszero(a) && bf16_iszero(b))
-        return true;
-    return a.bits == b.bits;
-}
+    bf16_t a[15] = {
+        {.bits = 0x0000},  // 0: +0.0
+        {.bits = 0x8000},  // 1: -0.0
+        {.bits = 0x3f80},  // 2: 1.0
+        {.bits = 0x4000},  // 3: 2.0
+        {.bits = 0x4040},  // 4: 3.0
+        {.bits = 0xbf80},  // 5: -1.0
+        {.bits = 0x7f80},  // 6: +Inf
+        {.bits = 0xff80},  // 7: -Inf
+        {.bits = 0x7fc1},  // 8: NaN (quiet)
+        {.bits = 0x4110},  // 9: 9.0
+        {.bits = 0xc080},  //10: -4.0
+        {.bits = 0x0001},  //11: subnormal small
+        {.bits = 0x0a4b},  //12: 1e-8
+        {.bits = 0x40a0},  //13: 5.0
+        {.bits = 0x7f00},  //14: large (may overflow)
+    };
 
-static inline bool bf16_lt(bf16_t a, bf16_t b)
-{
-    if (bf16_isnan(a) || bf16_isnan(b))
-        return false;
-    if (bf16_iszero(a) && bf16_iszero(b))
-        return false;
-    bool sign_a = (a.bits >> 15) & 1, sign_b = (b.bits >> 15) & 1;
-    if (sign_a != sign_b)
-        return sign_a > sign_b;
-    return sign_a ? a.bits > b.bits : a.bits < b.bits;
-}
+    bf16_t b[15] = {
+        {.bits = 0x0000},  //  0: +0.0             
+        {.bits = 0x0000},  //  1: +0.0             
+        {.bits = 0x4000},  //  2: 2.0              
+        {.bits = 0x3f80},  //  3: 1.0             
+        {.bits = 0x4000},  //  4: 2.0              
+        {.bits = 0x3f80},  //  5: 1.0          
+        {.bits = 0x3f80},  //  6: 1.0           
+        {.bits = 0x7f80},  //  7: +Inf          
+        {.bits = 0x3f80},  //  8: 1.0              
+        {.bits = 0x0000},  //  9: 0.0              
+        {.bits = 0x0000},  // 10: 0.0              
+        {.bits = 0x0001},  // 11: small subnormal  
+        {.bits = 0x0a4b},  // 12: very small       
+        {.bits = 0x0000},  // 13: 0.0            
+        {.bits = 0x7f00},  // 14: large           
+    };
 
-static inline bool bf16_gt(bf16_t a, bf16_t b)
-{
-    return bf16_lt(b, a);
-}
+    uint32_t test_float_bits[15] = {
+        0x3F800000, // 1.0
+        0x3FC00000, // 1.5
+        0x3F81AE14, // 1.01
+        0x00000000, // 0.0
+        0x80000000, // -0.0
+        0x477FE000, // 65504.0
+        0x7F800000, // +INF
+        0xFF800000, // -INF
+        0x7FC00000, // NaN
+        0x00000001, // Subnormal
+        0xC0200000, // -2.5
+        0x40490FDB, // pi ≈ 3.14159265
+        0xC2F6E979, // -123.456
+        0x3EAAAAAB, // ~0.33333334
+        0x2F06C6D6, // 1e-10
+    };
 
-#include <stdio.h>
-#include <time.h>
 
-#define TEST_ASSERT(cond, msg)         \
-    do {                               \
-        if (!(cond)) {                 \
-            printf("FAIL: %s\n", msg); \
-            return 1;                  \
-        }                              \
-    } while (0)
+    bool isNanAns[15] = {
+        false, false, false, false, false,
+        false, false, false, true,  false,
+        false, false, false, false, false
+    };
 
-static int test_basic_conversions(void)
-{
-    printf("Testing basic conversions...\n");
+    bool isInfAns[15] = {
+        false, false, false, false, false,
+        false, true,  true,  false, false,
+        false, false, false, false, false
+    };
 
-    float test_values[] = {0.0f,  1.0f,     -1.0f,     2.0f,  -2.0f, 0.5f,
-                           -0.5f, 3.14159f, -3.14159f, 1e10f, -1e10f};
+    bool isZeroAns[15] = {
+        true,  true,  false, false, false,
+        false, false, false, false, false,
+        false, false, false, false, false
+    };
 
-    for (size_t i = 0; i < sizeof(test_values) / sizeof(test_values[0]); i++) {
-        float orig = test_values[i];
-        bf16_t bf = f32_to_bf16(orig);
-        float conv = bf16_to_f32(bf);
+    bf16_t f32tob16Ans[15] = {
+        {.bits = 0x4e7e}, {.bits = 0x4e7f}, {.bits = 0x4e7e}, {.bits = 0x0000}, {.bits = 0x4f00},
+        {.bits = 0x4e8f}, {.bits = 0x4eff}, {.bits = 0x4f80}, {.bits = 0x4f00}, {.bits = 0x3f80},
+        {.bits = 0x4f40}, {.bits = 0x4e81}, {.bits = 0x4f43}, {.bits = 0x4e7b}, {.bits = 0x4e3c}
+    };
 
-        if (orig != 0.0f) {
-            TEST_ASSERT((orig < 0) == (conv < 0), "Sign mismatch");
-        }
+    uint32_t b16tof32Ans[15] = {
+        0x00000000, 0x80000000, 0x3f800000, 0x40000000, 0x40400000,
+        0xbf800000, 0x7f800000, 0xff800000, 0x7fc10000, 0x41100000,
+        0xc0800000, 0x00010000, 0x0a4b0000, 0x40a00000, 0x7f000000
+    };
 
-        if (orig != 0.0f && !bf16_isinf(f32_to_bf16(orig))) {
-            float diff = (conv - orig);
-            float rel_error = (diff < 0) ? -diff / orig : diff / orig;
-            TEST_ASSERT(rel_error < 0.01f, "Relative error too large");
-        }
+    bf16_t addAns[15] = {
+        {.bits = 0x0000}, {.bits = 0x0000}, {.bits = 0x4040}, {.bits = 0x4040}, {.bits = 0x40a0},
+        {.bits = 0x0000}, {.bits = 0x7f80}, {.bits = 0x7fc0}, {.bits = 0x7fc1}, {.bits = 0x4110},
+        {.bits = 0xc080}, {.bits = 0x0002}, {.bits = 0x0acb}, {.bits = 0x40a0}, {.bits = 0x7f80}
+    };
+
+    bf16_t subAns[15] = {
+        {.bits = 0x8000}, {.bits = 0x8000}, {.bits = 0xbf80}, {.bits = 0x3f80}, {.bits = 0x3f80},
+        {.bits = 0xc000}, {.bits = 0x7f80}, {.bits = 0xff80}, {.bits = 0x7fc1}, {.bits = 0x4110},
+        {.bits = 0xc080}, {.bits = 0x0000}, {.bits = 0x0000}, {.bits = 0x40a0}, {.bits = 0x0000}
+    };
+
+    bf16_t mulAns[15] = {
+        {.bits = 0x0000}, {.bits = 0x8000}, {.bits = 0x4000}, {.bits = 0x4000}, {.bits = 0x40c0},
+        {.bits = 0xbf80}, {.bits = 0x7f80}, {.bits = 0xff80}, {.bits = 0x7fc1}, {.bits = 0x0000},
+        {.bits = 0x8000}, {.bits = 0x0000}, {.bits = 0x0000}, {.bits = 0x0000}, {.bits = 0x7f80}
+    };
+
+    bf16_t divAns[15] = {
+        {.bits = 0x7fc0}, {.bits = 0x7fc0}, {.bits = 0x3f00}, {.bits = 0x4000}, {.bits = 0x3fc0},
+        {.bits = 0xbf80}, {.bits = 0x7f80}, {.bits = 0x7fc0}, {.bits = 0x7fc1}, {.bits = 0x7f80},
+        {.bits = 0xff80}, {.bits = 0x3f80}, {.bits = 0x3f80}, {.bits = 0x7f80}, {.bits = 0x3f80}
+    };
+
+    bf16_t squrAns[15] = {
+        {.bits = 0x0000}, {.bits = 0x0000}, {.bits = 0x3f80}, {.bits = 0x3fb5}, {.bits = 0x3fdd},
+        {.bits = 0x7fc0}, {.bits = 0x7f80}, {.bits = 0x7fc0}, {.bits = 0x7fc1}, {.bits = 0x4040},
+        {.bits = 0x7fc0}, {.bits = 0x0000}, {.bits = 0x24e4}, {.bits = 0x400f}, {.bits = 0x5f35}
+    };
+
+
+    for (int i = 0 ; i < 15 ; ++i)
+    {
+        printf("%d\n", i);
+        printf("Nan = %d\n", bf16_isnan(a[i]));
+        printf("INF = %d\n", bf16_isinf(a[i]));
+        printf("Zero = %d\n", bf16_iszero(a[i]));
+        printf("f32tob16 = %04hx\n", f32_to_bf16(test_float_bits[i]).bits);
+        float f = bf16_to_f32(a[i]);
+        uint32_t bits;
+        memcpy(&bits, &f, sizeof(bits));
+        printf("b16tof32 = %08x\n", bits);
+        printf("add = %04hx\n", bf16_add(a[i], b[i]).bits);
+        printf("sub = %04hx\n", bf16_sub(a[i], b[i]).bits);
+        printf("mul = %04hx\n", bf16_mul(a[i], b[i]).bits);
+        printf("div = %04hx\n", bf16_div(a[i], b[i]).bits);
+        printf("sqrt = %04hx\n", bf16_sqrt(a[i]).bits);
     }
 
-    printf("  Basic conversions: PASS\n");
     return 0;
 }
-
-static int test_special_values(void)
+/*int main()
 {
-    printf("Testing special values...\n");
+    int function;
+    bf16_t a, b, ans;
+    uint16_t input_a, input_b;
+    float  fInput_a; 
+    while (1)
+    {
+        printf("---------------------------------------\n");
+        printf("Function \n");
+        printf("0(NAN)     , 1(INF), 2(Zero), 3(F32toB16),\n");
+        printf("4(B16toF32), 5(Add), 6(Sub) , 7(Mul)     ,\n");
+        printf("8(Div)     , 9(Sqrt) : ");
+        scanf("%d", &function);
+        
+        switch(function)
+        {
+            case 0:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                a.bits = input_a;
+                printf("isnan(a): %s\n", bf16_isnan(a) ? "true" : "false");
+                break;
 
-    bf16_t pos_inf = {.bits = 0x7F80};  /* +Infinity */
-    TEST_ASSERT(bf16_isinf(pos_inf), "Positive infinity not detected");
-    TEST_ASSERT(!bf16_isnan(pos_inf), "Infinity detected as NaN");
+            case 1:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                a.bits = input_a;
+                printf("isinf(a): %s\n", bf16_isinf(a) ? "true" : "false");
+                break;
 
-    bf16_t neg_inf = {.bits = 0xFF80};  /* -Infinity */
-    TEST_ASSERT(bf16_isinf(neg_inf), "Negative infinity not detected");
+            case 2:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                a.bits = input_a;
+                printf("iszero(a): %s\n", bf16_iszero(a) ? "true" : "false");
+                break;
 
-    bf16_t nan_val = BF16_NAN();
-    TEST_ASSERT(bf16_isnan(nan_val), "NaN not detected");
-    TEST_ASSERT(!bf16_isinf(nan_val), "NaN detected as infinity");
+            case 3:
+                printf("Please input f32: ");
+                scanf("%f", &fInput_a);
+                a = f32_to_bf16(fInput_a);
+                printf("bf16 result: 0x%04hx\n", a.bits);
+                break;
 
-    bf16_t zero = f32_to_bf16(0.0f);
-    TEST_ASSERT(bf16_iszero(zero), "Zero not detected");
+            case 4:
+                printf("Please input b16(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                a.bits = input_a;
+                printf("float result: %f\n", bf16_to_f32(a));
+                break;
 
-    bf16_t neg_zero = f32_to_bf16(-0.0f);
-    TEST_ASSERT(bf16_iszero(neg_zero), "Negative zero not detected");
+            case 5:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                printf("Please input b(4-digit hex): 0x");
+                scanf("%hx", &input_b);
+                a.bits = input_a;
+                b.bits = input_b;
+                ans = bf16_add(a, b);
+                printf("add result: 0x%04hx\n", ans.bits);
+                break;
 
-    printf("  Special values: PASS\n");
-    return 0;
-}
 
-static int test_arithmetic(void)
-{
-    printf("Testing arithmetic operations...\n");
+            case 6:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                printf("Please input b(4-digit hex): 0x");
+                scanf("%hx", &input_b);
+                a.bits = input_a;
+                b.bits = input_b;
+                ans = bf16_sub(a, b);
+                printf("sub result: 0x%04hx\n", ans.bits);
+                break;
 
-    bf16_t a = f32_to_bf16(1.0f);
-    bf16_t b = f32_to_bf16(2.0f);
-    bf16_t c = bf16_add(a, b);
-    float result = bf16_to_f32(c);
-    float diff = result - 3.0f;
-    TEST_ASSERT((diff < 0 ? -diff : diff) < 0.01f, "Addition failed");
+            case 7:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                printf("Please input b(4-digit hex): 0x");
+                scanf("%hx", &input_b);
+                a.bits = input_a;
+                b.bits = input_b;
+                ans = bf16_mul(a, b);
+                printf("mul result: 0x%04hx\n", ans.bits);
+                break;
 
-    c = bf16_sub(b, a);
-    result = bf16_to_f32(c);
-    diff = result - 1.0f;
-    TEST_ASSERT((diff < 0 ? -diff : diff) < 0.01f, "Subtraction failed");
+            case 8:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                printf("Please input b(4-digit hex): 0x");
+                scanf("%hx", &input_b);
+                a.bits = input_a;
+                b.bits = input_b;
+                ans = bf16_div(a, b);
+                printf("div result: 0x%04hx\n", ans.bits);
+                break;
 
-    a = f32_to_bf16(3.0f);
-    b = f32_to_bf16(4.0f);
-    c = bf16_mul(a, b);
-    result = bf16_to_f32(c);
-    diff = result - 12.0f;
-    TEST_ASSERT((diff < 0 ? -diff : diff) < 0.1f, "Multiplication failed");
+            case 9:
+                printf("Please input a(4-digit hex): 0x");
+                scanf("%hx", &input_a);
+                a.bits = input_a;
+                ans = bf16_sqrt(a);
+                printf("sqrt result: 0x%04hx\n", ans.bits);
+                break;
 
-    a = f32_to_bf16(10.0f);
-    b = f32_to_bf16(2.0f);
-    c = bf16_div(a, b);
-    result = bf16_to_f32(c);
-    diff = result - 5.0f;
-    TEST_ASSERT((diff < 0 ? -diff : diff) < 0.1f, "Division failed");
-
-    /* Test square root */
-    a = f32_to_bf16(4.0f);
-    c = bf16_sqrt(a);
-    result = bf16_to_f32(c);
-    diff = result - 2.0f;
-    TEST_ASSERT((diff < 0 ? -diff : diff) < 0.01f, "sqrt(4) failed");
-
-    a = f32_to_bf16(9.0f);
-    c = bf16_sqrt(a);
-    result = bf16_to_f32(c);
-    diff = result - 3.0f;
-    TEST_ASSERT((diff < 0 ? -diff : diff) < 0.01f, "sqrt(9) failed");
-
-    printf("  Arithmetic: PASS\n");
-    return 0;
-}
-
-static int test_comparisons(void)
-{
-    printf("Testing comparison operations...\n");
-
-    bf16_t a = f32_to_bf16(1.0f);
-    bf16_t b = f32_to_bf16(2.0f);
-    bf16_t c = f32_to_bf16(1.0f);
-
-    TEST_ASSERT(bf16_eq(a, c), "Equality test failed");
-    TEST_ASSERT(!bf16_eq(a, b), "Inequality test failed");
-
-    TEST_ASSERT(bf16_lt(a, b), "Less than test failed");
-    TEST_ASSERT(!bf16_lt(b, a), "Not less than test failed");
-    TEST_ASSERT(!bf16_lt(a, c), "Equal not less than test failed");
-
-    TEST_ASSERT(bf16_gt(b, a), "Greater than test failed");
-    TEST_ASSERT(!bf16_gt(a, b), "Not greater than test failed");
-
-    bf16_t nan_val = BF16_NAN();
-    TEST_ASSERT(!bf16_eq(nan_val, nan_val), "NaN equality test failed");
-    TEST_ASSERT(!bf16_lt(nan_val, a), "NaN less than test failed");
-    TEST_ASSERT(!bf16_gt(nan_val, a), "NaN greater than test failed");
-
-    printf("  Comparisons: PASS\n");
-    return 0;
-}
-
-static int test_edge_cases(void)
-{
-    printf("Testing edge cases...\n");
-
-    float tiny = 1e-45f;
-    bf16_t bf_tiny = f32_to_bf16(tiny);
-    float tiny_val = bf16_to_f32(bf_tiny);
-    TEST_ASSERT(bf16_iszero(bf_tiny) || (tiny_val < 0 ? -tiny_val : tiny_val) < 1e-37f,
-                "Tiny value handling");
-
-    float huge = 1e38f;
-    bf16_t bf_huge = f32_to_bf16(huge);
-    bf16_t bf_huge2 = bf16_mul(bf_huge, f32_to_bf16(10.0f));
-    TEST_ASSERT(bf16_isinf(bf_huge2), "Overflow should produce infinity");
-
-    bf16_t small = f32_to_bf16(1e-38f);
-    bf16_t smaller = bf16_div(small, f32_to_bf16(1e10f));
-    float smaller_val = bf16_to_f32(smaller);
-    TEST_ASSERT(bf16_iszero(smaller) || (smaller_val < 0 ? -smaller_val : smaller_val) < 1e-45f,
-                "Underflow should produce zero or denormal");
-
-    printf("  Edge cases: PASS\n");
-    return 0;
-}
-
-static int test_rounding(void)
-{
-    printf("Testing rounding behavior...\n");
-
-    float exact = 1.5f;
-    bf16_t bf_exact = f32_to_bf16(exact);
-    float back_exact = bf16_to_f32(bf_exact);
-    TEST_ASSERT(back_exact == exact,
-                "Exact representation should be preserved");
-
-    float val = 1.0001f;
-    bf16_t bf = f32_to_bf16(val);
-    float back = bf16_to_f32(bf);
-    float diff2 = back - val;
-    TEST_ASSERT((diff2 < 0 ? -diff2 : diff2) < 0.001f, "Rounding error should be small");
-
-    printf("  Rounding: PASS\n");
-    return 0;
-}
-
-#ifndef BFLOAT16_NO_MAIN
-int main(void)
-{
-    printf("\n=== bfloat16 Test Suite ===\n\n");
-
-    int failed = 0;
-
-    failed |= test_basic_conversions();
-    failed |= test_special_values();
-    failed |= test_arithmetic();
-    failed |= test_comparisons();
-    failed |= test_edge_cases();
-    failed |= test_rounding();
-
-    if (failed) {
-        printf("\n=== TESTS FAILED ===\n");
-        return 1;
+            default:
+                break;
+        }
+    
     }
 
-    printf("\n=== ALL TESTS PASSED ===\n");
+
     return 0;
-}
-#endif /* BFLOAT16_NO_MAIN */
+    
+}*/
